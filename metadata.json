@@ -1,0 +1,5 @@
+{
+  "name": "LocalThesis",
+  "description": "A privacy-first, offline-ready academic writing environment designed for focus and data sovereignty. Features local AI integration, academic phrasebank, and distraction-free Zen mode.",
+  "requestFramePermissions": []
+}
