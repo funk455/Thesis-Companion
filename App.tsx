@@ -120,9 +120,23 @@ export default function App() {
                content = URL.createObjectURL(file.fileHandle);
              } else if (content === undefined) {
                 if (file.name.toLowerCase().endsWith('.docx')) {
-                     const arrayBuffer = await file.fileHandle.arrayBuffer();
-                     const result = await mammoth.extractRawText({ arrayBuffer });
-                     content = result.value;
+                     // Fix for empty or corrupted docx files
+                     if (file.fileHandle.size === 0) {
+                         content = "";
+                     } else {
+                         const arrayBuffer = await file.fileHandle.arrayBuffer();
+                         if (arrayBuffer.byteLength === 0) {
+                             content = "";
+                         } else {
+                             try {
+                                const result = await mammoth.extractRawText({ arrayBuffer });
+                                content = result.value;
+                             } catch (err: any) {
+                                console.warn("Mammoth extraction warning:", err);
+                                content = `[Error reading .docx file. The file may be empty or corrupted.]`;
+                             }
+                         }
+                     }
                  } else {
                      content = await file.fileHandle.text();
                  }
