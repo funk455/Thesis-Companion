@@ -5,22 +5,24 @@
   "author": "LocalThesis User",
   "main": "electron-main.js",
   "scripts": {
-    "start": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "start": "concurrently \"npm run dev\" \"npm run electron:wait\"",
+    "dev": "vite",
+    "electron:wait": "wait-on tcp:5173 && electron .",
+    "build": "tsc && vite build",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
   },
   "build": {
     "appId": "com.localthesis.app",
     "productName": "LocalThesis",
     "files": [
-      "**/*",
-      "!dist",
-      "!node_modules",
-      "!*.ts",
-      "!*.tsx"
+      "dist/**/*",
+      "electron-main.js",
+      "package.json",
+      "icon.svg"
     ],
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "mac": {
       "category": "public.app-category.productivity",
@@ -34,8 +36,24 @@
       "target": ["AppImage"]
     }
   },
+  "dependencies": {
+    "@google/genai": "^0.1.2",
+    "lucide-react": "^0.344.0",
+    "mammoth": "^1.7.1",
+    "pdfjs-dist": "^3.11.174",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "recharts": "^2.12.2"
+  },
   "devDependencies": {
+    "@types/react": "^18.2.64",
+    "@types/react-dom": "^18.2.21",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
     "electron": "^28.2.0",
-    "electron-builder": "^24.9.1"
+    "electron-builder": "^24.9.1",
+    "typescript": "^5.4.2",
+    "vite": "^5.1.6",
+    "wait-on": "^7.2.0"
   }
 }

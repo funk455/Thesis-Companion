@@ -1,23 +1,31 @@
 const { app, BrowserWindow, shell } = require('electron');
 const path = require('path');
 
+const isDev = !app.isPackaged;
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
     title: "LocalThesis",
-    icon: path.join(__dirname, 'icon.svg'), // Electron builder will auto-convert for Win/Mac
+    icon: path.join(__dirname, 'icon.svg'),
     webPreferences: {
-      nodeIntegration: false, // Security: Keep true isolation
+      nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false // Allow loading local resources and mixed content (esm.sh) easier in this prototype
+      webSecurity: false // Keeping disabled for local file access in this demo
     }
   });
 
-  // Load the index.html of the app.
-  win.loadFile('index.html');
+  win.setMenuBarVisibility(false);
 
-  // Open external links in default browser, not inside the app
+  // In development, load from Vite server to handle TSX compilation
+  if (isDev) {
+    win.loadURL('http://localhost:5173');
+  } else {
+    win.loadFile(path.join(__dirname, 'dist', 'index.html'));
+  }
+
+  // Handle external links
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http')) {
       shell.openExternal(url);
@@ -25,9 +33,6 @@ function createWindow() {
     }
     return { action: 'allow' };
   });
-
-  // Remove the default menu bar for a cleaner "Zen" look
-  win.setMenuBarVisibility(false);
 }
 
 app.whenReady().then(() => {
