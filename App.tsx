@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 // @ts-ignore
 import mammoth from 'mammoth';
 import { Sidebar } from './components/Sidebar';
@@ -41,6 +41,9 @@ export default function App() {
   // Default open on desktop, closed on mobile? Let's default to open, but use responsive CSS
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
+  
+  // Store layout state before entering Zen mode to restore it later
+  const [preZenLayout, setPreZenLayout] = useState({ left: true, right: true });
   
   const [selectedText, setSelectedText] = useState('');
   const [fontSize, setFontSize] = useState(16);
@@ -158,16 +161,34 @@ export default function App() {
     if (window.innerWidth < 768) setIsRightOpen(false);
   };
 
-  const toggleZen = () => {
-    setZenMode(!zenMode);
+  // Toggle Zen Mode with Memory and Shortcut Logic
+  const toggleZen = useCallback(() => {
     if (!zenMode) {
+      // Entering Zen: Save current state
+      setPreZenLayout({ left: isLeftOpen, right: isRightOpen });
       setIsLeftOpen(false);
-      setIsRightOpen(false);
+      // We do NOT close the right sidebar automatically anymore based on user request
+      // setIsRightOpen(false); 
+      setZenMode(true);
     } else {
-      setIsLeftOpen(true);
-      setIsRightOpen(true);
+      // Exiting Zen: Restore previous state
+      setIsLeftOpen(preZenLayout.left);
+      setIsRightOpen(preZenLayout.right);
+      setZenMode(false);
     }
-  };
+  }, [zenMode, isLeftOpen, isRightOpen, preZenLayout]);
+
+  // Keyboard Shortcut for Zen Mode (Alt+Z)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        toggleZen();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleZen]);
 
   // Styles
   const mainBg = theme === 'sepia' ? 'bg-sepia-50' : 'bg-dark-bg';
@@ -204,35 +225,37 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full min-w-0 relative">
         
-        {/* Toolbar */}
-        <div className={`h-12 md:h-10 border-b flex items-center justify-between px-3 flex-shrink-0 z-20 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-300' : 'bg-dark-sidebar border-dark-border'}`}>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setIsLeftOpen(!isLeftOpen)} className={`p-1.5 rounded hover:bg-black/10 ${iconColor}`}>
-              {isLeftOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-            </button>
-            <span className={`text-xs md:text-sm font-medium ml-1 truncate max-w-[120px] md:max-w-none ${iconColor}`}>
-              {activeFile?.name || 'LocalThesis'}
-            </span>
-          </div>
-          
-          <div className="flex items-center gap-2 md:gap-3">
-            <div className="flex items-center bg-black/5 rounded p-0.5">
-              <button onClick={() => setTheme('dark')} className={`p-1.5 md:p-1 rounded ${theme === 'dark' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-700'}`}><Moon size={14} /></button>
-              <button onClick={() => setTheme('sepia')} className={`p-1.5 md:p-1 rounded ${theme === 'sepia' ? 'bg-sepia-400 text-sepia-900' : 'text-gray-500 hover:text-gray-700'}`}><Coffee size={14} /></button>
-              <button onClick={() => setTheme('light')} className={`p-1.5 md:p-1 rounded ${theme === 'light' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Sun size={14} /></button>
+        {/* Toolbar (Hidden in Zen Mode) */}
+        {!zenMode && (
+          <div className={`h-12 md:h-10 border-b flex items-center justify-between px-3 flex-shrink-0 z-20 transition-all duration-300 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-300' : 'bg-dark-sidebar border-dark-border'}`}>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setIsLeftOpen(!isLeftOpen)} className={`p-1.5 rounded hover:bg-black/10 ${iconColor}`}>
+                {isLeftOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+              </button>
+              <span className={`text-xs md:text-sm font-medium ml-1 truncate max-w-[120px] md:max-w-none ${iconColor}`}>
+                {activeFile?.name || 'LocalThesis'}
+              </span>
             </div>
             
-            <div className="w-px h-4 bg-gray-500/20 mx-1 hidden md:block" />
+            <div className="flex items-center gap-2 md:gap-3">
+              <div className="flex items-center bg-black/5 rounded p-0.5">
+                <button onClick={() => setTheme('dark')} className={`p-1.5 md:p-1 rounded ${theme === 'dark' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-700'}`}><Moon size={14} /></button>
+                <button onClick={() => setTheme('sepia')} className={`p-1.5 md:p-1 rounded ${theme === 'sepia' ? 'bg-sepia-400 text-sepia-900' : 'text-gray-500 hover:text-gray-700'}`}><Coffee size={14} /></button>
+                <button onClick={() => setTheme('light')} className={`p-1.5 md:p-1 rounded ${theme === 'light' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Sun size={14} /></button>
+              </div>
+              
+              <div className="w-px h-4 bg-gray-500/20 mx-1 hidden md:block" />
 
-            <button onClick={toggleZen} className={`p-1.5 rounded hover:bg-black/10 hidden md:block ${iconColor}`} title="Toggle Zen Mode">
-              {zenMode ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-            </button>
-            
-            <button onClick={() => setIsRightOpen(!isRightOpen)} className={`p-1.5 rounded hover:bg-black/10 ${iconColor}`}>
-              {isRightOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
-            </button>
+              <button onClick={toggleZen} className={`p-1.5 rounded hover:bg-black/10 hidden md:block ${iconColor}`} title="Toggle Zen Mode (Alt+Z)">
+                <Maximize2 size={18} />
+              </button>
+              
+              <button onClick={() => setIsRightOpen(!isRightOpen)} className={`p-1.5 rounded hover:bg-black/10 ${iconColor}`}>
+                {isRightOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* 
            Content Split View 
@@ -251,7 +274,7 @@ export default function App() {
           )}
 
           {/* Editor/Image Pane */}
-          <div className="flex-1 relative h-full w-full">
+          <div className="flex-1 relative h-full w-full group">
             {activeFile?.type === 'image' ? (
               <ImageViewer 
                 file={activeFile} 
@@ -270,10 +293,35 @@ export default function App() {
               />
             )}
             
-            {/* Zen Mode Floating Controls */}
+            {/* Zen Mode Floating Controls - Optimized for better visibility and UX */}
             {zenMode && (
-               <div className="absolute top-4 right-4 flex gap-2 opacity-0 hover:opacity-100 transition-opacity duration-300">
-                  <button onClick={toggleZen} className="p-2 bg-gray-800 text-white rounded-full shadow-lg"><Minimize2 size={16} /></button>
+               <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
+                  <div className={`
+                    flex items-center gap-2 p-1.5 rounded-full shadow-lg border backdrop-blur-sm transition-all duration-300
+                    ${theme === 'sepia' ? 'bg-sepia-100/80 border-sepia-300 text-sepia-900' : 'bg-gray-800/80 border-gray-600 text-gray-200'}
+                    opacity-40 hover:opacity-100
+                  `}>
+                    <button 
+                      onClick={() => setIsRightOpen(!isRightOpen)} 
+                      className="p-1.5 hover:bg-black/10 rounded-full transition-colors"
+                      title={isRightOpen ? "Hide Tools" : "Show Tools"}
+                    >
+                      {isRightOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+                    </button>
+
+                    <div className="w-px h-4 bg-gray-500/30"></div>
+
+                    <button 
+                      onClick={toggleZen} 
+                      className="p-1.5 hover:bg-black/10 rounded-full transition-colors flex items-center gap-2"
+                      title="Exit Zen Mode (Alt+Z)"
+                    >
+                      <Minimize2 size={16} />
+                      <span className="text-[10px] font-mono pr-1 hidden md:inline-block">
+                        Alt+Z
+                      </span>
+                    </button>
+                  </div>
                </div>
             )}
           </div>
@@ -285,7 +333,7 @@ export default function App() {
         - Mobile: Absolute, z-50, overlay
         - Desktop: Relative, flex item
       */}
-      {!zenMode && isRightOpen && (
+      {isRightOpen && (
         <div className={`fixed inset-y-0 right-0 z-50 w-72 md:w-72 shadow-2xl md:relative md:shadow-none border-l flex flex-col flex-shrink-0 h-full ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-200' : 'bg-dark-sidebar border-dark-border'}`}>
           <div className="flex border-b border-inherit">
              <button 

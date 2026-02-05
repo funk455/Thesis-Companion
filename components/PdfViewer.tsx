@@ -2,10 +2,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { FileNode } from '../types';
 import { 
   X, Upload, FileText, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, 
-  Hand, MousePointer2, Highlighter, Trash2, Languages
+  Hand, MousePointer2, Highlighter, Trash2, Languages, Loader2
 } from 'lucide-react';
 // @ts-ignore
 import * as pdfjsModule from 'pdfjs-dist';
+import { generateText } from '../services/geminiService';
 
 // Resolving the library object safely
 const pdfjsLib = pdfjsModule.default || pdfjsModule;
@@ -34,6 +35,10 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
   // Tools: 'hand' (drag to pan) | 'cursor' (select text)
   const [toolMode, setToolMode] = useState<'hand' | 'cursor'>('cursor');
   const [highlights, setHighlights] = useState<HighlightArea[]>([]);
+
+  // Translation State
+  const [showTranslation, setShowTranslation] = useState(false);
+  const [translationData, setTranslationData] = useState({ original: '', translated: '', loading: false });
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -268,8 +273,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
     setHighlights(prev => prev.filter(h => h.page !== pageNum));
   };
 
-  // --- Translation Logic (Browser Based) ---
-  const handleTranslate = () => {
+  // --- Translation Logic (In-App Gemini) ---
+  const handleTranslate = async () => {
     const selection = window.getSelection();
     const text = selection?.toString().trim();
     
@@ -277,8 +282,18 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
       alert("Please select text to translate first.");
       return;
     }
-    const url = `https://translate.google.com/?sl=auto&tl=zh-CN&text=${encodeURIComponent(text)}`;
-    window.open(url, '_blank');
+
+    setShowTranslation(true);
+    setTranslationData({ original: text, translated: '', loading: true });
+
+    try {
+      const prompt = `Translate the following academic text into Chinese (Simplified). Only provide the translation, no explanations:\n\n"${text}"`;
+      // Use a fast model for translation
+      const result = await generateText(prompt, { enabled: true, model: 'gemini-3-flash-preview' });
+      setTranslationData(prev => ({ ...prev, translated: result, loading: false }));
+    } catch (e) {
+      setTranslationData(prev => ({ ...prev, translated: "Translation failed. Please check your internet connection.", loading: false }));
+    }
   };
 
   // --- Controls ---
@@ -366,7 +381,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
             <button 
                 onClick={handleTranslate}
                 className={`p-1 rounded ${textClass} ${buttonHover} hover:text-blue-400`}
-                title="Translate Selected Text (Google Translate)"
+                title="Translate Selected Text"
                 disabled={toolMode === 'hand'}
               >
                 <Languages size={14} />
@@ -452,6 +467,47 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
             )}
         </div>
       </div>
+
+      {/* 3. Translation Modal (Overlay) */}
+      {showTranslation && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm p-4">
+          <div className={`w-full max-w-md rounded-xl shadow-2xl flex flex-col max-h-[70%] ring-1 ring-black/5 ${theme === 'sepia' ? 'bg-sepia-50 text-sepia-900' : 'bg-gray-800 text-gray-200'}`}>
+            <div className={`flex justify-between items-center p-3 border-b ${theme === 'sepia' ? 'border-sepia-200' : 'border-gray-700'}`}>
+              <h3 className="font-bold flex items-center gap-2 text-sm"><Languages size={14}/> Translate Selection</h3>
+              <button 
+                onClick={() => setShowTranslation(false)}
+                className={`p-1 rounded hover:bg-black/10`}
+              >
+                <X size={14}/>
+              </button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+               {/* Original Text */}
+               <div>
+                 <div className="text-[10px] uppercase tracking-wider opacity-50 mb-1">Original</div>
+                 <div className={`text-xs p-2 rounded italic border-l-2 opacity-80 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-400' : 'bg-gray-700/50 border-blue-500'}`}>
+                    {translationData.original}
+                 </div>
+               </div>
+
+               {/* Translated Text */}
+               <div>
+                 <div className="text-[10px] uppercase tracking-wider opacity-50 mb-1">Chinese (Simplified)</div>
+                 <div className="text-sm leading-relaxed min-h-[60px]">
+                    {translationData.loading ? (
+                        <div className="flex items-center gap-2 opacity-60">
+                          <Loader2 size={14} className="animate-spin"/> Translating...
+                        </div>
+                    ) : (
+                        translationData.translated
+                    )}
+                 </div>
+               </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
