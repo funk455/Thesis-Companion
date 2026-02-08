@@ -258,9 +258,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ files, activeFileId, onFileCli
     }
   };
 
-  // Removed w-64, using h-full w-full to fill parent container
   return (
-    <div className={`h-full w-full flex flex-col border-r ${bgClass}`}>
+    <div className={`h-full w-64 flex-shrink-0 border-r flex flex-col ${bgClass}`}>
       {/* Hidden Input for Folder Selection */}
       <input
         type="file"

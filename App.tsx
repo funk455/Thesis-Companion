@@ -37,16 +37,16 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>('dark');
   const [zenMode, setZenMode] = useState(false);
   const [rightPanelTab, setRightPanelTab] = useState<'phrases' | 'ai' | 'stats' | 'todos'>('phrases');
-  
-  // Default open on desktop, closed on mobile? Let's default to open, but use responsive CSS
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
-  
-  // Store layout state before entering Zen mode to restore it later
-  const [preZenLayout, setPreZenLayout] = useState({ left: true, right: true });
-  
   const [selectedText, setSelectedText] = useState('');
   const [fontSize, setFontSize] = useState(16);
+
+  // Daily Stats State
+  const [dailyStats, setDailyStats] = useState<Record<string, number>>(() => {
+    const saved = localStorage.getItem('localthesis_daily_stats');
+    return saved ? JSON.parse(saved) : {};
+  });
 
   // Derived state
   const wordCount = useMemo(() => {
@@ -66,6 +66,8 @@ export default function App() {
   // Save workspace structure whenever files change
   useEffect(() => {
     // We only save the structure (metadata), not the actual file objects if they are blobs
+    // For this simple app, we serialize the whole tree.
+    // In a real app with File Objects, we'd strip those out before saving.
     const cleanFiles = JSON.stringify(files, (key, value) => {
       if (key === 'fileHandle') return undefined; // Exclude actual File objects
       return value;
@@ -73,85 +75,78 @@ export default function App() {
     localStorage.setItem('localthesis_workspace', cleanFiles);
   }, [files]);
 
+  // Save Daily Stats
+  useEffect(() => {
+    localStorage.setItem('localthesis_daily_stats', JSON.stringify(dailyStats));
+  }, [dailyStats]);
+
   // Cleanup Object URLs when switching files or unmounting to prevent memory leaks
   useEffect(() => {
     return () => {
+      // If the content is a blob URL (starts with blob:), revoke it
       if (fileContent && fileContent.startsWith('blob:')) {
         URL.revokeObjectURL(fileContent);
       }
     };
-  }, [activeFile?.id]);
-
-  // Auto-close sidebars on mobile when selecting a file (optional UX improvement)
-  const handleMobileSidebarClose = () => {
-    if (window.innerWidth < 768) {
-      setIsLeftOpen(false);
-    }
-  };
+  }, [activeFile?.id]); // Run when active file ID changes
 
   // Helpers
-  const updateFileContent = (fileId: string, newContent: string) => {
-    const updateNode = (nodes: FileNode[]): FileNode[] => {
-      return nodes.map(node => {
-        if (node.id === fileId) {
-          return { ...node, content: newContent };
-        }
-        if (node.children) {
-          return { ...node, children: updateNode(node.children) };
-        }
-        return node;
-      });
-    };
-    setFiles(prev => updateNode(prev));
+  const countWords = (text: string) => text.split(/\s+/).filter(w => w.length > 0).length;
+
+  const getLocalDateKey = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   };
 
-  // Handlers
-  const handleFileClick = async (file: FileNode) => {
-    if (file.type === 'pdf') {
-      setActivePdf(file);
-      handleMobileSidebarClose();
-    } else {
-      let content = file.content;
-      
-      // Load content from file handle if not already loaded or if it needs refreshing
-      if (file.fileHandle) {
-         try {
-             if (file.type === 'image') {
-               content = URL.createObjectURL(file.fileHandle);
-             } else if (content === undefined) {
-                if (file.name.toLowerCase().endsWith('.docx')) {
-                     // Fix for empty or corrupted docx files
-                     if (file.fileHandle.size === 0) {
-                         content = "";
-                     } else {
-                         const arrayBuffer = await file.fileHandle.arrayBuffer();
-                         if (arrayBuffer.byteLength === 0) {
-                             content = "";
-                         } else {
-                             try {
-                                const result = await mammoth.extractRawText({ arrayBuffer });
-                                content = result.value;
-                             } catch (err: any) {
-                                console.warn("Mammoth extraction warning:", err);
-                                content = `[Error reading .docx file. The file may be empty or corrupted.]`;
-                             }
-                         }
-                     }
-                 } else {
-                     content = await file.fileHandle.text();
-                 }
-                 updateFileContent(file.id, content || '');
-             }
-         } catch (e) {
-             console.error(e);
-             content = `Error reading file: ${(e as Error).message}`;
-         }
+  // Central content update handler that tracks productivity
+  const handleContentChange = (newContent: string) => {
+    // 1. Calculate Delta (Productivity)
+    // Only track if we are editing a valid text file
+    if (activeFile && activeFile.type !== 'image' && activeFile.type !== 'pdf') {
+      const oldWords = countWords(fileContent);
+      const newWords = countWords(newContent);
+      const delta = newWords - oldWords;
+
+      if (delta !== 0) {
+        const today = getLocalDateKey(new Date());
+        setDailyStats(prev => {
+          const currentTotal = prev[today] || 0;
+          return {
+            ...prev,
+            [today]: currentTotal + delta
+          };
+        });
       }
-      
-      setActiveFile({ ...file, content: content || '' });
-      setFileContent(content || '');
-      handleMobileSidebarClose();
     }
+
+    // 2. Update Content State
+    setFileContent(newContent);
+    
+    // 3. Sync to Files Tree (to persist content)
+    if (activeFile) {
+        setFiles(prev => {
+            const updateNode = (nodes: FileNode[]): FileNode[] => {
+                return nodes.map(node => {
+                    if (node.id === activeFile.id) {
+                        return { ...node, content: newContent };
+                    }
+                    if (node.children) {
+                        return { ...node, children: updateNode(node.children) };
+                    }
+                    return node;
+                });
+            };
+            return updateNode(prev);
+        });
+    }
+  };
+
+  const handleInsertText = (text: string) => {
+    // Append text with a space
+    const newContent = fileContent + (fileContent.endsWith(' ') || fileContent === '' ? '' : ' ') + text;
+    handleContentChange(newContent);
   };
 
   const handleToggleFolder = (folderId: string) => {
@@ -169,116 +164,128 @@ export default function App() {
     setFiles(toggleNode(files));
   };
 
-  const handleInsertText = (text: string) => {
-    setFileContent(prev => prev + ' ' + text);
-    // On mobile, close right panel after insert to see content
-    if (window.innerWidth < 768) setIsRightOpen(false);
+  // Handlers
+  const handleFileClick = async (file: FileNode) => {
+    if (file.type === 'pdf') {
+      setActivePdf(file);
+      // We don't set activeFile for PDF to keep the main editor area available for taking notes
+      // unless we want to replace the editor with the PDF. 
+      // Current design: PDF opens in split pane, Editor remains.
+    } else {
+      let content = file.content;
+      
+      // Load content from file handle if not already loaded or if it needs refreshing (like images)
+      if (file.fileHandle) {
+         try {
+             if (file.type === 'image') {
+               // Create a new object URL for the image
+               content = URL.createObjectURL(file.fileHandle);
+               // We don't strictly need to update the file tree state with the blob URL
+               // as it changes per session, but we do update the local content state.
+             } else if (content === undefined) {
+                // Text/Docx processing
+                if (file.name.toLowerCase().endsWith('.docx')) {
+                     const arrayBuffer = await file.fileHandle.arrayBuffer();
+                     const result = await mammoth.extractRawText({ arrayBuffer });
+                     content = result.value;
+                 } else {
+                     // Default to text for other types
+                     content = await file.fileHandle.text();
+                 }
+                 
+                 // Note: We don't call handleContentChange here because loading a file isn't "Productivity"
+                 // We manually update the tree cache if needed
+                 setFiles(prev => {
+                     const updateNode = (nodes: FileNode[]): FileNode[] => {
+                         return nodes.map(n => {
+                             if (n.id === file.id) return { ...n, content: content };
+                             if (n.children) return { ...n, children: updateNode(n.children) };
+                             return n;
+                         });
+                     };
+                     return updateNode(prev);
+                 });
+             }
+         } catch (e) {
+             console.error(e);
+             content = `Error reading file: ${(e as Error).message}`;
+         }
+      }
+      
+      setActiveFile({ ...file, content: content || '' });
+      setFileContent(content || '');
+    }
   };
 
-  // Toggle Zen Mode with Memory and Shortcut Logic
-  const toggleZen = useCallback(() => {
+  const toggleZen = () => {
+    setZenMode(!zenMode);
     if (!zenMode) {
-      // Entering Zen: Save current state
-      setPreZenLayout({ left: isLeftOpen, right: isRightOpen });
+      // Enter Zen Mode: Close Left, Ensure Right is Open (as requested)
       setIsLeftOpen(false);
-      // We do NOT close the right sidebar automatically anymore based on user request
-      // setIsRightOpen(false); 
-      setZenMode(true);
+      setIsRightOpen(true);
     } else {
-      // Exiting Zen: Restore previous state
-      setIsLeftOpen(preZenLayout.left);
-      setIsRightOpen(preZenLayout.right);
-      setZenMode(false);
+      // Exit Zen Mode: Reset to standard view
+      setIsLeftOpen(true);
+      setIsRightOpen(true);
     }
-  }, [zenMode, isLeftOpen, isRightOpen, preZenLayout]);
-
-  // Keyboard Shortcut for Zen Mode (Alt+Z)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.altKey && (e.key === 'z' || e.key === 'Z')) {
-        e.preventDefault();
-        toggleZen();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleZen]);
+  };
 
   // Styles
   const mainBg = theme === 'sepia' ? 'bg-sepia-50' : 'bg-dark-bg';
+  const borderColor = theme === 'sepia' ? 'border-sepia-300' : 'border-dark-border';
   const iconColor = theme === 'sepia' ? 'text-sepia-900' : 'text-gray-400';
 
   return (
     <div className={`flex h-screen w-screen overflow-hidden ${mainBg} ${theme === 'dark' ? 'text-gray-200' : 'text-gray-800'}`}>
       
-      {/* 
-        LEFT SIDEBAR: 
-        - Mobile: Absolute, z-50, overlay
-        - Desktop: Relative, flex item
-      */}
+      {/* Left Sidebar */}
       {!zenMode && isLeftOpen && (
-        <div className="fixed inset-y-0 left-0 z-50 w-64 shadow-2xl md:relative md:shadow-none h-full flex-shrink-0 transition-all duration-300">
-          <Sidebar 
-            files={files} 
-            activeFileId={activeFile?.id || null} 
-            onFileClick={handleFileClick} 
-            onToggleFolder={handleToggleFolder}
-            onSetFiles={setFiles}
-            theme={theme}
-          />
-        </div>
-      )}
-      {/* Mobile Backdrop for Left Sidebar */}
-      {!zenMode && isLeftOpen && (
-        <div 
-          className="md:hidden fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-          onClick={() => setIsLeftOpen(false)} 
+        <Sidebar 
+          files={files} 
+          activeFileId={activeFile?.id || null} 
+          onFileClick={handleFileClick} 
+          onToggleFolder={handleToggleFolder}
+          onSetFiles={setFiles} // Pass the setter
+          theme={theme}
         />
       )}
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full min-w-0 relative">
         
-        {/* Toolbar (Hidden in Zen Mode) */}
+        {/* Toolbar (Hidden in Zen) */}
         {!zenMode && (
-          <div className={`h-12 md:h-10 border-b flex items-center justify-between px-3 flex-shrink-0 z-20 transition-all duration-300 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-300' : 'bg-dark-sidebar border-dark-border'}`}>
+          <div className={`h-10 border-b flex items-center justify-between px-3 flex-shrink-0 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-300' : 'bg-dark-sidebar border-dark-border'}`}>
             <div className="flex items-center gap-2">
-              <button onClick={() => setIsLeftOpen(!isLeftOpen)} className={`p-1.5 rounded hover:bg-black/10 ${iconColor}`}>
-                {isLeftOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+              <button onClick={() => setIsLeftOpen(!isLeftOpen)} className={`p-1 rounded hover:bg-black/10 ${iconColor}`}>
+                {isLeftOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
               </button>
-              <span className={`text-xs md:text-sm font-medium ml-1 truncate max-w-[120px] md:max-w-none ${iconColor}`}>
-                {activeFile?.name || 'LocalThesis'}
-              </span>
+              <span className={`text-xs font-medium ml-2 ${iconColor}`}>{activeFile?.name || 'LocalThesis'}</span>
             </div>
             
-            <div className="flex items-center gap-2 md:gap-3">
+            <div className="flex items-center gap-3">
               <div className="flex items-center bg-black/5 rounded p-0.5">
-                <button onClick={() => setTheme('dark')} className={`p-1.5 md:p-1 rounded ${theme === 'dark' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-700'}`}><Moon size={14} /></button>
-                <button onClick={() => setTheme('sepia')} className={`p-1.5 md:p-1 rounded ${theme === 'sepia' ? 'bg-sepia-400 text-sepia-900' : 'text-gray-500 hover:text-gray-700'}`}><Coffee size={14} /></button>
-                <button onClick={() => setTheme('light')} className={`p-1.5 md:p-1 rounded ${theme === 'light' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Sun size={14} /></button>
+                <button onClick={() => setTheme('dark')} className={`p-1 rounded ${theme === 'dark' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-700'}`}><Moon size={12} /></button>
+                <button onClick={() => setTheme('sepia')} className={`p-1 rounded ${theme === 'sepia' ? 'bg-sepia-400 text-sepia-900' : 'text-gray-500 hover:text-gray-700'}`}><Coffee size={12} /></button>
+                <button onClick={() => setTheme('light')} className={`p-1 rounded ${theme === 'light' ? 'bg-white text-black shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}><Sun size={12} /></button>
               </div>
               
-              <div className="w-px h-4 bg-gray-500/20 mx-1 hidden md:block" />
+              <div className="w-px h-4 bg-gray-500/20 mx-1" />
 
-              <button onClick={toggleZen} className={`p-1.5 rounded hover:bg-black/10 hidden md:block ${iconColor}`} title="Toggle Zen Mode (Alt+Z)">
-                <Maximize2 size={18} />
+              <button onClick={toggleZen} className={`p-1 rounded hover:bg-black/10 ${iconColor}`} title="Toggle Zen Mode">
+                <Maximize2 size={16} />
               </button>
               
-              <button onClick={() => setIsRightOpen(!isRightOpen)} className={`p-1.5 rounded hover:bg-black/10 ${iconColor}`}>
-                {isRightOpen ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
+              <button onClick={() => setIsRightOpen(!isRightOpen)} className={`p-1 rounded hover:bg-black/10 ${iconColor}`}>
+                {isRightOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
               </button>
             </div>
           </div>
         )}
 
-        {/* 
-           Content Split View 
-           - Mobile: Flex-col (Stacked vertically if both present)
-           - Desktop: Flex-row (Side by side)
-        */}
-        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
-          
-          {/* PDF Pane */}
+        {/* Content Split View */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* PDF Viewer Pane */}
           {activePdf && !zenMode && (
              <PdfViewer 
                file={activePdf} 
@@ -287,8 +294,8 @@ export default function App() {
              />
           )}
 
-          {/* Editor/Image Pane */}
-          <div className="flex-1 relative h-full w-full group">
+          {/* Editor/Image Viewer Pane */}
+          <div className="flex-1 relative">
             {activeFile?.type === 'image' ? (
               <ImageViewer 
                 file={activeFile} 
@@ -299,7 +306,7 @@ export default function App() {
               <Editor 
                 file={activeFile}
                 content={fileContent}
-                onChange={setFileContent}
+                onChange={handleContentChange} // Use the tracker wrapper
                 onSelectText={setSelectedText}
                 theme={theme}
                 isZen={zenMode}
@@ -307,48 +314,24 @@ export default function App() {
               />
             )}
             
-            {/* Zen Mode Floating Controls - Optimized for better visibility and UX */}
+            {/* Zen Mode Floating Controls */}
             {zenMode && (
-               <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
-                  <div className={`
-                    flex items-center gap-2 p-1.5 rounded-full shadow-lg border backdrop-blur-sm transition-all duration-300
-                    ${theme === 'sepia' ? 'bg-sepia-100/80 border-sepia-300 text-sepia-900' : 'bg-gray-800/80 border-gray-600 text-gray-200'}
-                    opacity-40 hover:opacity-100
-                  `}>
-                    <button 
-                      onClick={() => setIsRightOpen(!isRightOpen)} 
-                      className="p-1.5 hover:bg-black/10 rounded-full transition-colors"
-                      title={isRightOpen ? "Hide Tools" : "Show Tools"}
-                    >
-                      {isRightOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-                    </button>
-
-                    <div className="w-px h-4 bg-gray-500/30"></div>
-
-                    <button 
-                      onClick={toggleZen} 
-                      className="p-1.5 hover:bg-black/10 rounded-full transition-colors flex items-center gap-2"
-                      title="Exit Zen Mode (Alt+Z)"
-                    >
-                      <Minimize2 size={16} />
-                      <span className="text-[10px] font-mono pr-1 hidden md:inline-block">
-                        Alt+Z
-                      </span>
-                    </button>
-                  </div>
+               <div className="absolute top-4 right-4 flex gap-2 opacity-0 hover:opacity-100 transition-opacity duration-300 z-50">
+                  <button onClick={() => setIsRightOpen(!isRightOpen)} className="p-2 bg-gray-800 text-white rounded-full shadow-lg" title="Toggle Sidebar">
+                    {isRightOpen ? <PanelRightClose size={16} /> : <PanelLeftOpen size={16} />}
+                  </button>
+                  <button onClick={toggleZen} className="p-2 bg-gray-800 text-white rounded-full shadow-lg" title="Exit Zen Mode">
+                    <Minimize2 size={16} />
+                  </button>
                </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* 
-        RIGHT SIDEBAR:
-        - Mobile: Absolute, z-50, overlay
-        - Desktop: Relative, flex item
-      */}
+      {/* Right Sidebar (Tools) - Now enabled in Zen Mode if toggled */}
       {isRightOpen && (
-        <div className={`fixed inset-y-0 right-0 z-50 w-72 md:w-72 shadow-2xl md:relative md:shadow-none border-l flex flex-col flex-shrink-0 h-full ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-200' : 'bg-dark-sidebar border-dark-border'}`}>
+        <div className={`w-72 border-l flex flex-col flex-shrink-0 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-200' : 'bg-dark-sidebar border-dark-border'}`}>
           <div className="flex border-b border-inherit">
              <button 
                 onClick={() => setRightPanelTab('phrases')}
@@ -383,17 +366,10 @@ export default function App() {
           <div className="flex-1 overflow-hidden">
             {rightPanelTab === 'phrases' && <PhraseBank onInsert={handleInsertText} theme={theme} />}
             {rightPanelTab === 'ai' && <LocalAI onInsert={handleInsertText} selectedText={selectedText} theme={theme} />}
-            {rightPanelTab === 'stats' && <ZenControls theme={theme} wordCount={wordCount} />}
+            {rightPanelTab === 'stats' && <ZenControls theme={theme} wordCount={wordCount} dailyStats={dailyStats} />}
             {rightPanelTab === 'todos' && <TodoList theme={theme} />}
           </div>
         </div>
-      )}
-      {/* Mobile Backdrop for Right Sidebar */}
-      {!zenMode && isRightOpen && (
-        <div 
-          className="md:hidden fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
-          onClick={() => setIsRightOpen(false)} 
-        />
       )}
     </div>
   );

@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { FileNode } from '../types';
+import { FileNode, AIConfig } from '../types';
+import { generateText } from '../services/geminiService';
 import { 
   X, Upload, FileText, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, 
-  Hand, MousePointer2, Highlighter, Trash2, Languages, Loader2
+  Hand, MousePointer2, Highlighter, Trash2, Languages, StickyNote, Check,
+  Loader2, Copy
 } from 'lucide-react';
 // @ts-ignore
 import * as pdfjsModule from 'pdfjs-dist';
-import { generateText } from '../services/geminiService';
 
 // Resolving the library object safely
 const pdfjsLib = pdfjsModule.default || pdfjsModule;
@@ -23,6 +24,22 @@ interface HighlightArea {
   page: number;
 }
 
+interface PdfNote {
+  id: string;
+  x: number; // Percentage 0-100
+  y: number; // Percentage 0-100
+  page: number;
+  text: string;
+  isOpen: boolean;
+}
+
+interface TranslationState {
+  isOpen: boolean;
+  sourceText: string;
+  translatedText: string;
+  loading: boolean;
+}
+
 export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) => {
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [pageNum, setPageNum] = useState(1);
@@ -32,13 +49,21 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
   const [error, setError] = useState<string | null>(null);
   const [workerReady, setWorkerReady] = useState(false);
   
-  // Tools: 'hand' (drag to pan) | 'cursor' (select text)
-  const [toolMode, setToolMode] = useState<'hand' | 'cursor'>('cursor');
+  // Tools: 'hand' | 'cursor' | 'note'
+  const [toolMode, setToolMode] = useState<'hand' | 'cursor' | 'note'>('cursor');
   const [highlights, setHighlights] = useState<HighlightArea[]>([]);
-
+  const [notes, setNotes] = useState<PdfNote[]>([]);
+  
   // Translation State
-  const [showTranslation, setShowTranslation] = useState(false);
-  const [translationData, setTranslationData] = useState({ original: '', translated: '', loading: false });
+  const [translation, setTranslation] = useState<TranslationState>({
+    isOpen: false,
+    sourceText: '',
+    translatedText: '',
+    loading: false
+  });
+  
+  // Temp state for creating a new note
+  const [pendingNote, setPendingNote] = useState<Partial<PdfNote> | null>(null);
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -76,7 +101,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
     setupWorker();
   }, []);
 
-  // 2. Load PDF
+  // 2. Load PDF & Restore Notes
   useEffect(() => {
     if (!workerReady) return;
     let active = true;
@@ -86,7 +111,17 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
       setError(null);
       setPdfDoc(null);
       setPageNum(1);
-      setHighlights([]); // Reset highlights on new file
+      setHighlights([]); 
+
+      // Load notes from local storage
+      const savedNotes = localStorage.getItem(`pdf_notes_${file.id}`);
+      if (savedNotes) {
+        try {
+          setNotes(JSON.parse(savedNotes));
+        } catch (e) { console.error("Failed to load notes", e); }
+      } else {
+        setNotes([]);
+      }
 
       try {
         let url = '';
@@ -122,6 +157,13 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
     loadPdf();
     return () => { active = false; };
   }, [file, workerReady]);
+
+  // Persist notes on change
+  useEffect(() => {
+    if (file.id) {
+      localStorage.setItem(`pdf_notes_${file.id}`, JSON.stringify(notes));
+    }
+  }, [notes, file.id]);
 
   // 3. Render Page (Canvas + Text Layer)
   useEffect(() => {
@@ -237,6 +279,29 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
         scrollTop: containerRef.current.scrollTop,
       };
       containerRef.current.style.cursor = 'grabbing';
+      return;
+    }
+
+    // Add Note Logic
+    if (toolMode === 'note' && contentWrapperRef.current) {
+      // Don't trigger if clicking existing note
+      if ((e.target as HTMLElement).closest('.pdf-note')) return;
+
+      const rect = contentWrapperRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      // Calculate percentage to handle zoom
+      const xPercent = (x / rect.width) * 100;
+      const yPercent = (y / rect.height) * 100;
+
+      setPendingNote({
+        x: xPercent,
+        y: yPercent,
+        page: pageNum,
+        text: '',
+        isOpen: true
+      });
     }
   };
 
@@ -273,6 +338,31 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
     setHighlights(prev => prev.filter(h => h.page !== pageNum));
   };
 
+  // --- Note Logic ---
+  const savePendingNote = () => {
+    if (pendingNote && pendingNote.text?.trim()) {
+      const newNote: PdfNote = {
+        id: Date.now().toString(),
+        x: pendingNote.x!,
+        y: pendingNote.y!,
+        page: pendingNote.page!,
+        text: pendingNote.text!,
+        isOpen: false // Close after save
+      };
+      setNotes(prev => [...prev, newNote]);
+    }
+    setPendingNote(null);
+    setToolMode('cursor'); // Reset to cursor after adding note
+  };
+
+  const deleteNote = (noteId: string) => {
+    setNotes(prev => prev.filter(n => n.id !== noteId));
+  };
+
+  const toggleNoteOpen = (noteId: string) => {
+    setNotes(prev => prev.map(n => n.id === noteId ? { ...n, isOpen: !n.isOpen } : n));
+  };
+
   // --- Translation Logic (In-App Gemini) ---
   const handleTranslate = async () => {
     const selection = window.getSelection();
@@ -283,17 +373,36 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
       return;
     }
 
-    setShowTranslation(true);
-    setTranslationData({ original: text, translated: '', loading: true });
+    setTranslation({
+      isOpen: true,
+      sourceText: text,
+      translatedText: '',
+      loading: true
+    });
 
     try {
-      const prompt = `Translate the following academic text into Chinese (Simplified). Only provide the translation, no explanations:\n\n"${text}"`;
-      // Use a fast model for translation
-      const result = await generateText(prompt, { enabled: true, model: 'gemini-3-flash-preview' });
-      setTranslationData(prev => ({ ...prev, translated: result, loading: false }));
+      // Use Gemini to translate
+      const config: AIConfig = { enabled: true, model: 'gemini-3-flash-preview' };
+      const prompt = `Translate the following text into Chinese (Simplified). Only provide the translation, no explanations:\n\n"${text}"`;
+      
+      const result = await generateText(prompt, config);
+      
+      setTranslation(prev => ({
+        ...prev,
+        translatedText: result,
+        loading: false
+      }));
     } catch (e) {
-      setTranslationData(prev => ({ ...prev, translated: "Translation failed. Please check your internet connection.", loading: false }));
+      setTranslation(prev => ({
+        ...prev,
+        translatedText: "Translation failed. Please check your network or API key.",
+        loading: false
+      }));
     }
+  };
+
+  const closeTranslation = () => {
+    setTranslation(prev => ({ ...prev, isOpen: false }));
   };
 
   // --- Controls ---
@@ -316,14 +425,32 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
   const activeToolClass = theme === 'sepia' ? 'bg-sepia-300 text-sepia-900' : 'bg-blue-600 text-white';
 
   return (
-    // Changed: Responsive width (w-full on mobile, 1/2 on lg desktop)
-    <div className={`flex-shrink-0 flex flex-col w-full h-1/2 lg:h-full lg:w-1/2 border-b lg:border-b-0 lg:border-r ${bgClass} transition-colors duration-300 relative`}>
+    <div className={`w-1/2 border-r flex flex-col h-full ${bgClass} transition-colors duration-300 relative`}>
       {/* 1. Toolbar */}
       <div className={`flex items-center gap-2 p-2 text-xs border-b ${theme === 'sepia' ? 'border-sepia-300 bg-sepia-200' : 'border-dark-border bg-black/20'} overflow-x-auto whitespace-nowrap`}>
-        {/* Left: File Name (Flexible) */}
-        <div className={`flex items-center gap-2 font-bold opacity-70 flex-shrink-0 mr-auto ${textClass}`}>
-          <FileText size={14} className="flex-shrink-0" />
-          <span className="truncate max-w-[150px]" title={file.name}>{file.name}</span>
+        {/* Left: Mode Tools (Moved from right) */}
+        <div className="flex gap-1 mr-auto">
+            <button 
+              onClick={() => setToolMode('hand')} 
+              className={`p-1 rounded ${toolMode === 'hand' ? activeToolClass : `${textClass} ${buttonHover}`}`}
+              title="Hand Tool (Drag to Pan)"
+            >
+              <Hand size={14} />
+            </button>
+            <button 
+              onClick={() => setToolMode('cursor')} 
+              className={`p-1 rounded ${toolMode === 'cursor' ? activeToolClass : `${textClass} ${buttonHover}`}`}
+              title="Selection Tool"
+            >
+              <MousePointer2 size={14} />
+            </button>
+            <button 
+              onClick={() => setToolMode('note')} 
+              className={`p-1 rounded ${toolMode === 'note' ? activeToolClass : `${textClass} ${buttonHover}`}`}
+              title="Add Note"
+            >
+              <StickyNote size={14} />
+            </button>
         </div>
         
         {/* Right: Controls (Grouped) */}
@@ -348,41 +475,21 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
           
           <div className="w-px h-3 bg-gray-400/30 mx-1"></div>
           
-          {/* Mode Tools */}
-          <div className="flex gap-1">
-            <button 
-              onClick={() => setToolMode('hand')} 
-              className={`p-1 rounded ${toolMode === 'hand' ? activeToolClass : `${textClass} ${buttonHover}`}`}
-              title="Hand Tool (Drag to Pan)"
-            >
-              <Hand size={14} />
-            </button>
-            <button 
-              onClick={() => setToolMode('cursor')} 
-              className={`p-1 rounded ${toolMode === 'cursor' ? activeToolClass : `${textClass} ${buttonHover}`}`}
-              title="Selection Tool"
-            >
-              <MousePointer2 size={14} />
-            </button>
-          </div>
-
-          <div className="w-px h-3 bg-gray-400/30 mx-1"></div>
-
           {/* Action Tools */}
           <div className="flex gap-1">
             <button 
               onClick={addHighlight} 
               className={`p-1 rounded ${textClass} ${buttonHover} hover:text-yellow-400`}
               title="Highlight Selected Text"
-              disabled={toolMode === 'hand'}
+              disabled={toolMode === 'hand' || toolMode === 'note'}
             >
               <Highlighter size={14} />
             </button>
             <button 
                 onClick={handleTranslate}
                 className={`p-1 rounded ${textClass} ${buttonHover} hover:text-blue-400`}
-                title="Translate Selected Text"
-                disabled={toolMode === 'hand'}
+                title="Translate Selected Text (AI)"
+                disabled={toolMode === 'hand' || toolMode === 'note'}
               >
                 <Languages size={14} />
             </button>
@@ -407,7 +514,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
       <div 
         ref={containerRef}
         onMouseDown={handleMouseDown}
-        className={`flex-1 relative overflow-auto bg-gray-500/10 ${toolMode === 'hand' ? 'cursor-grab active:cursor-grabbing select-none' : 'cursor-text'}`}
+        className={`flex-1 relative overflow-auto bg-gray-500/10 ${toolMode === 'hand' ? 'cursor-grab active:cursor-grabbing select-none' : (toolMode === 'note' ? 'cursor-crosshair' : 'cursor-text')}`}
       >
         <style>{`
           .textLayer {
@@ -457,7 +564,61 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
                   ))}
                 </div>
 
-                {/* Layer 3: Text Layer */}
+                {/* Layer 3: Notes (Existing) */}
+                <div className="absolute top-0 left-0 w-full h-full z-30 pointer-events-none">
+                   {notes.filter(n => n.page === pageNum).map(note => (
+                     <div 
+                       key={note.id} 
+                       className="absolute pointer-events-auto flex flex-col items-center pdf-note"
+                       style={{ left: `${note.x}%`, top: `${note.y}%` }}
+                     >
+                        {/* Note Icon */}
+                        <button 
+                          onClick={() => toggleNoteOpen(note.id)}
+                          className="bg-yellow-200 text-yellow-900 p-1 rounded-full shadow hover:bg-yellow-300 transform -translate-x-1/2 -translate-y-1/2 transition-transform hover:scale-110"
+                        >
+                          <StickyNote size={20} fill="#fef08a" />
+                        </button>
+
+                        {/* Note Content (Popover) */}
+                        {note.isOpen && (
+                          <div className="absolute top-6 left-0 bg-yellow-100 border border-yellow-300 rounded shadow-lg p-2 w-48 z-50 animate-in fade-in zoom-in-95 duration-100 origin-top-left text-gray-800">
+                             <div className="text-xs mb-1 whitespace-pre-wrap leading-relaxed">{note.text}</div>
+                             <div className="flex justify-end pt-1 border-t border-yellow-200/50">
+                                <button onClick={() => deleteNote(note.id)} className="p-1 text-red-500 hover:bg-red-500/10 rounded" title="Delete Note">
+                                  <Trash2 size={12} />
+                                </button>
+                             </div>
+                          </div>
+                        )}
+                     </div>
+                   ))}
+                </div>
+
+                {/* Layer 4: New Note Input */}
+                {pendingNote && pendingNote.page === pageNum && (
+                  <div 
+                    className="absolute z-40 bg-yellow-100 border border-yellow-300 shadow-xl rounded p-2 w-56 flex flex-col gap-2 pdf-note"
+                    style={{ left: `${pendingNote.x}%`, top: `${pendingNote.y}%` }}
+                  >
+                    <textarea 
+                      autoFocus
+                      placeholder="Type your thought..."
+                      value={pendingNote.text}
+                      onChange={e => setPendingNote(prev => ({ ...prev, text: e.target.value }))}
+                      onKeyDown={e => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); savePendingNote(); }}}
+                      className="w-full h-20 bg-transparent resize-none outline-none text-xs text-gray-800 placeholder-yellow-800/40"
+                    />
+                    <div className="flex justify-between items-center">
+                       <button onClick={() => setPendingNote(null)} className="text-[10px] text-gray-500 hover:text-gray-700 uppercase tracking-wide">Cancel</button>
+                       <button onClick={savePendingNote} className="p-1 bg-yellow-400 text-yellow-900 rounded hover:bg-yellow-500">
+                         <Check size={14} />
+                       </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Layer 5: Text Layer */}
                 <div ref={textLayerRef} className="textLayer z-20" />
             </div>
             ) : (
@@ -468,43 +629,56 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ file, onClose, theme }) =>
         </div>
       </div>
 
-      {/* 3. Translation Modal (Overlay) */}
-      {showTranslation && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm p-4">
-          <div className={`w-full max-w-md rounded-xl shadow-2xl flex flex-col max-h-[70%] ring-1 ring-black/5 ${theme === 'sepia' ? 'bg-sepia-50 text-sepia-900' : 'bg-gray-800 text-gray-200'}`}>
-            <div className={`flex justify-between items-center p-3 border-b ${theme === 'sepia' ? 'border-sepia-200' : 'border-gray-700'}`}>
-              <h3 className="font-bold flex items-center gap-2 text-sm"><Languages size={14}/> Translate Selection</h3>
-              <button 
-                onClick={() => setShowTranslation(false)}
-                className={`p-1 rounded hover:bg-black/10`}
-              >
-                <X size={14}/>
-              </button>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-               {/* Original Text */}
-               <div>
-                 <div className="text-[10px] uppercase tracking-wider opacity-50 mb-1">Original</div>
-                 <div className={`text-xs p-2 rounded italic border-l-2 opacity-80 ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-400' : 'bg-gray-700/50 border-blue-500'}`}>
-                    {translationData.original}
-                 </div>
-               </div>
+      {/* Floating Translation Window */}
+      {translation.isOpen && (
+        <div className={`absolute top-12 right-4 z-50 w-72 rounded-lg shadow-2xl border flex flex-col ${theme === 'sepia' ? 'bg-sepia-50 border-sepia-300' : 'bg-gray-800 border-gray-700'}`}>
+          {/* Header */}
+          <div className={`flex items-center justify-between p-2 border-b ${theme === 'sepia' ? 'bg-sepia-100 border-sepia-200' : 'bg-gray-900 border-gray-700'}`}>
+             <div className={`flex items-center gap-2 text-xs font-semibold ${textClass}`}>
+               <Languages size={14} /> Quick Translate
+             </div>
+             <button onClick={closeTranslation} className={`p-1 rounded hover:bg-red-500/10 hover:text-red-500 ${textClass}`}>
+               <X size={14} />
+             </button>
+          </div>
 
-               {/* Translated Text */}
-               <div>
-                 <div className="text-[10px] uppercase tracking-wider opacity-50 mb-1">Chinese (Simplified)</div>
-                 <div className="text-sm leading-relaxed min-h-[60px]">
-                    {translationData.loading ? (
-                        <div className="flex items-center gap-2 opacity-60">
-                          <Loader2 size={14} className="animate-spin"/> Translating...
-                        </div>
-                    ) : (
-                        translationData.translated
-                    )}
-                 </div>
+          {/* Content */}
+          <div className="p-3 flex flex-col gap-3 max-h-96 overflow-y-auto">
+             {/* Source */}
+             <div>
+               <div className={`text-[10px] uppercase tracking-wider opacity-50 mb-1 ${textClass}`}>Original</div>
+               <div className={`text-xs p-2 rounded bg-opacity-50 italic ${theme === 'sepia' ? 'bg-sepia-200 text-sepia-800' : 'bg-gray-900 text-gray-400'}`}>
+                 "{translation.sourceText.length > 150 ? translation.sourceText.substring(0, 150) + '...' : translation.sourceText}"
                </div>
-            </div>
+             </div>
+             
+             {/* Result */}
+             <div>
+               <div className={`text-[10px] uppercase tracking-wider opacity-50 mb-1 ${textClass}`}>Translation (ZH-CN)</div>
+               <div className={`text-sm leading-relaxed ${textClass} min-h-[60px]`}>
+                 {translation.loading ? (
+                   <div className="flex items-center gap-2 opacity-60">
+                     <Loader2 size={16} className="animate-spin" /> Translating...
+                   </div>
+                 ) : (
+                   translation.translatedText
+                 )}
+               </div>
+             </div>
+          </div>
+          
+          {/* Footer actions */}
+          <div className={`p-2 border-t flex justify-end gap-2 ${theme === 'sepia' ? 'border-sepia-200' : 'border-gray-700'}`}>
+             <button 
+               onClick={() => {
+                 navigator.clipboard.writeText(translation.translatedText);
+               }}
+               disabled={translation.loading || !translation.translatedText}
+               className={`p-1.5 rounded text-xs flex items-center gap-1 transition-colors ${theme === 'sepia' ? 'hover:bg-sepia-200 text-sepia-900' : 'hover:bg-gray-700 text-gray-300'}`}
+               title="Copy Translation"
+             >
+               <Copy size={12} /> Copy
+             </button>
           </div>
         </div>
       )}

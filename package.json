@@ -1,59 +1,26 @@
 {
-  "name": "local-thesis",
-  "version": "1.0.0",
-  "description": "Privacy-First Academic Writing Environment",
-  "author": "LocalThesis User",
-  "main": "electron-main.js",
+  "name": "localthesis",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "start": "concurrently \"npm run dev\" \"npm run electron:wait\"",
     "dev": "vite",
-    "electron:wait": "wait-on tcp:5173 && electron .",
-    "build": "tsc && vite build",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder"
-  },
-  "build": {
-    "appId": "com.localthesis.app",
-    "productName": "LocalThesis",
-    "files": [
-      "dist/**/*",
-      "electron-main.js",
-      "package.json",
-      "icon.svg"
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "mac": {
-      "category": "public.app-category.productivity",
-      "target": ["dmg"]
-    },
-    "win": {
-      "target": "portable",
-      "icon": "icon.svg"
-    },
-    "linux": {
-      "target": ["AppImage"]
-    }
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^0.1.2",
-    "lucide-react": "^0.344.0",
-    "mammoth": "^1.7.1",
-    "pdfjs-dist": "^3.11.174",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "recharts": "^2.12.2"
+    "react-dom": "^19.2.3",
+    "lucide-react": "^0.562.0",
+    "react": "^19.2.3",
+    "recharts": "^3.6.0",
+    "mammoth": "1.8.0",
+    "pdfjs-dist": "3.11.174",
+    "@google/genai": "latest"
   },
   "devDependencies": {
-    "@types/react": "^18.2.64",
-    "@types/react-dom": "^18.2.21",
-    "@vitejs/plugin-react": "^4.2.1",
-    "concurrently": "^8.2.2",
-    "electron": "^28.2.0",
-    "electron-builder": "^24.9.1",
-    "typescript": "^5.4.2",
-    "vite": "^5.1.6",
-    "wait-on": "^7.2.0"
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
   }
 }

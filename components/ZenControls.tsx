@@ -1,24 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { PomodoroState } from '../types';
 import { Timer, Activity, Play, Pause, RotateCcw } from 'lucide-react';
 import { BarChart, Bar, ResponsiveContainer, XAxis, Tooltip } from 'recharts';
 
 interface ZenControlsProps {
   theme: string;
-  wordCount: number;
+  wordCount: number; // Keep this for "Total File Words" if needed
+  dailyStats: Record<string, number>; // New prop: History of productivity
 }
 
-const DAILY_STATS = [
-  { day: 'M', words: 450 },
-  { day: 'T', words: 1200 },
-  { day: 'W', words: 800 },
-  { day: 'T', words: 2300 },
-  { day: 'F', words: 150 },
-  { day: 'S', words: 0 },
-  { day: 'S', words: 600 },
-];
-
-export const ZenControls: React.FC<ZenControlsProps> = ({ theme, wordCount }) => {
+export const ZenControls: React.FC<ZenControlsProps> = ({ theme, wordCount, dailyStats }) => {
   const [pomodoro, setPomodoro] = useState<PomodoroState>({
     isActive: false,
     timeLeft: 25 * 60,
@@ -51,6 +42,40 @@ export const ZenControls: React.FC<ZenControlsProps> = ({ theme, wordCount }) =>
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
+  // Helper to get local date string YYYY-MM-DD to match App.tsx
+  const getLocalDateKey = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Generate dynamic chart data for the last 7 days
+  const { chartData, todayWords } = useMemo(() => {
+    const data = [];
+    const today = new Date();
+    const todayKey = getLocalDateKey(today);
+    
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const dateKey = getLocalDateKey(d);
+      // Use 'short' (Mon, Tue) instead of 'narrow' (M, T) to avoid ambiguity between Sat/Sun (S/S) or Tue/Thu (T/T)
+      const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short' }); 
+      
+      data.push({
+        day: dayLabel,
+        fullDate: dateKey,
+        words: dailyStats[dateKey] || 0
+      });
+    }
+
+    return { 
+      chartData: data, 
+      todayWords: dailyStats[todayKey] || 0 
+    };
+  }, [dailyStats]);
+
   const textClass = theme === 'sepia' ? 'text-sepia-900' : 'text-gray-200';
 
   return (
@@ -79,19 +104,21 @@ export const ZenControls: React.FC<ZenControlsProps> = ({ theme, wordCount }) =>
       </div>
 
       {/* Stats Section */}
-      <div className="p-4 flex-1">
+      <div className="p-4 flex-1 flex flex-col">
         <h3 className={`font-semibold flex items-center gap-2 mb-4 ${textClass}`}>
           <Activity size={16} /> Productivity
         </h3>
         
         <div className={`mb-6 p-3 rounded text-center ${theme === 'sepia' ? 'bg-sepia-100' : 'bg-gray-800'}`}>
-          <div className={`text-xs opacity-70 mb-1 ${textClass}`}>Current Session</div>
-          <div className={`text-2xl font-bold ${textClass}`}>{wordCount} <span className="text-xs font-normal">words</span></div>
+          <div className={`text-xs opacity-70 mb-1 ${textClass}`}>Today's Output</div>
+          <div className={`text-2xl font-bold ${textClass}`}>
+            {todayWords > 0 ? '+' : ''}{todayWords} <span className="text-xs font-normal">words</span>
+          </div>
         </div>
 
-        <div className="h-40 w-full">
+        <div className="flex-1 min-h-[160px] w-full">
            <ResponsiveContainer width="100%" height="100%">
-             <BarChart data={DAILY_STATS}>
+             <BarChart data={chartData}>
                <XAxis 
                  dataKey="day" 
                  axisLine={false} 
@@ -101,11 +128,14 @@ export const ZenControls: React.FC<ZenControlsProps> = ({ theme, wordCount }) =>
                <Tooltip 
                  contentStyle={{ 
                    backgroundColor: theme === 'sepia' ? '#fbf7ef' : '#252526',
-                   border: 'none',
+                   border: '1px solid ' + (theme === 'sepia' ? '#ebdcb0' : '#444'),
                    borderRadius: '4px',
-                   color: theme === 'sepia' ? '#382e14' : '#fff'
+                   color: theme === 'sepia' ? '#382e14' : '#fff',
+                   fontSize: '12px'
                  }}
-                 cursor={{fill: 'transparent'}}
+                 cursor={{fill: theme === 'sepia' ? 'rgba(92, 75, 30, 0.1)' : 'rgba(255, 255, 255, 0.1)'}}
+                 formatter={(value: number) => [`${value} words`, 'Written']}
+                 labelFormatter={(label, payload) => payload[0]?.payload.fullDate || label}
                />
                <Bar dataKey="words" fill={theme === 'sepia' ? '#dec282' : '#3b82f6'} radius={[2, 2, 0, 0]} />
              </BarChart>

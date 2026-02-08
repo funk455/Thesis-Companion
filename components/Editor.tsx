@@ -55,8 +55,8 @@ export const Editor: React.FC<EditorProps> = ({
   const bgClass = theme === 'sepia' ? 'bg-sepia-50' : 'bg-dark-bg';
   const textClass = theme === 'sepia' ? 'text-sepia-900' : 'text-gray-300';
   
-  // Changed: In Zen mode, use w-full and remove max-width/mx-auto to fill space up to the sidebar
-  const zenClass = isZen ? 'w-full px-12 pt-20' : 'p-8 max-w-4xl mx-auto';
+  // Adjusted Zen Class: Removes mx-auto and max-w constraint to fill available space
+  const zenClass = isZen ? 'w-full max-w-none px-12 pt-16' : 'p-8 max-w-4xl mx-auto';
 
   return (
     <div className={`h-full w-full overflow-y-auto ${bgClass} transition-colors duration-300 relative`}>
